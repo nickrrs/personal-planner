@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, Notification, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, Notification, nativeImage, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -120,6 +120,86 @@ ipcMain.on('notify', (_e, { title, body, taskId }) => {
   });
   n.on('close', () => activeNotifications.delete(n));
   n.show();
+});
+
+// ---------- alertas com pergunta "Você já finalizou?" ----------
+
+const ALERT_WIDTH = 380;
+const alerts = new Map();
+
+function layoutAlerts() {
+  const area = screen.getPrimaryDisplay().workArea;
+  let bottom = area.y + area.height - 12;
+  for (const a of alerts.values()) {
+    if (a.win.isDestroyed()) continue;
+    bottom -= a.height;
+    a.win.setBounds({ x: area.x + area.width - ALERT_WIDTH - 12, y: bottom, width: ALERT_WIDTH, height: a.height });
+    bottom -= 10;
+  }
+}
+
+ipcMain.on('alert:show', (_e, p) => {
+  for (const a of alerts.values()) if (a.key === p.key) return;
+  const alertWin = new BrowserWindow({
+    width: ALERT_WIDTH,
+    height: 200,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    icon: icon(),
+    backgroundColor: '#111c33',
+    webPreferences: {
+      preload: path.join(__dirname, 'alert-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      autoplayPolicy: 'no-user-gesture-required',
+    },
+  });
+  alertWin.setAlwaysOnTop(true, 'screen-saver');
+  const id = alertWin.webContents.id;
+  const rec = { win: alertWin, taskId: p.taskId, key: p.key, kind: p.kind, timer: null, height: 200 };
+  alerts.set(id, rec);
+  alertWin.on('closed', () => {
+    clearTimeout(rec.timer);
+    alerts.delete(id);
+    layoutAlerts();
+  });
+  if (p.expiresAt) {
+    rec.timer = setTimeout(() => {
+      if (!alertWin.isDestroyed()) alertWin.close();
+    }, Math.max(0, p.expiresAt - Date.now()));
+  }
+  alertWin.loadFile(path.join(__dirname, 'src', 'alert.html'), {
+    query: { heading: p.heading, task: p.task, detail: p.detail },
+  });
+});
+
+ipcMain.on('alert:resize', (e, height) => {
+  const rec = alerts.get(e.sender.id);
+  if (!rec) return;
+  rec.height = Math.ceil(height);
+  layoutAlerts();
+  if (!rec.win.isVisible()) rec.win.showInactive();
+});
+
+ipcMain.on('alert:answer', (e, answer) => {
+  const rec = alerts.get(e.sender.id);
+  if (!rec) return;
+  if (answer !== 'dismiss' && win && !win.isDestroyed()) {
+    win.webContents.send('alert-answer', { taskId: rec.taskId, kind: rec.kind, answer });
+  }
+  rec.win.close();
+});
+
+ipcMain.on('alert:close-task', (_e, taskId) => {
+  for (const a of [...alerts.values()]) {
+    if (a.taskId === taskId && !a.win.isDestroyed()) a.win.close();
+  }
 });
 
 ipcMain.handle('attach:pick', async (e) => {

@@ -313,6 +313,7 @@ function changedLight() {
 
 function toggleDone(t, done = !t.done) {
   t.done = done;
+  if (done) window.api.closeAlerts(t.id);
   changed();
 }
 
@@ -384,7 +385,7 @@ function renderHeader() {
   btn.textContent = on ? '\u{1F514} Notificações' : '\u{1F515} Notificações';
   btn.classList.toggle('off', !on);
   btn.title = on
-    ? 'Notificações ativas no modo Cronograma: no início da atividade e 10 min antes do fim, se não estiver concluída. Clique para desativar.'
+    ? 'Notificações ativas no modo Cronograma: no início da atividade e 10 min antes do fim (perguntando se já finalizou; se não, avisa de novo a 1 min do fim). Clique para desativar.'
     : 'Notificações desativadas. Clique para ativar.';
 }
 
@@ -1162,10 +1163,44 @@ function checkNotifications() {
     if (m >= s && m < s + 5) {
       notifyOnce(t, 'start', t.start, `Hora de começar: ${name}`, t.end ? `${t.start} – ${t.end}` : `Começa às ${t.start}`);
     }
-    if (e != null && e > s && m >= e - 10 && m < e) {
-      const left = e - m;
-      notifyOnce(t, 'end', t.end, `Faltam ${left} min para terminar: ${name}`, `Termina às ${t.end} e ainda não foi concluída.`);
-    }
+    if (e == null || e <= s || m >= e) continue;
+    if (m >= e - 1 && followUps.has(endKey(t))) askOnce(t, 'end1', e, m);
+    else if (m >= e - 10) askOnce(t, 'end10', e, m);
+  }
+}
+
+// Alertas "Você já finalizou?": o de 10 min e, se a resposta for "Ainda não", outro a 1 min do fim.
+const followUps = new Set();
+const endKey = (t) => `${t.id}|${t.date}|${t.end}`;
+
+function askOnce(t, kind, e, m) {
+  const key = `${endKey(t)}|${kind}`;
+  if (notified.has(key)) return;
+  notified.add(key);
+  const left = e - m;
+  const expires = parseDate(t.date);
+  expires.setHours(0, e, 0, 0);
+  window.api.showAlert({
+    taskId: t.id,
+    key,
+    kind,
+    heading: left <= 1 ? '\u23F0 Falta 1 minuto para terminar' : `\u23F0 Faltam ${left} minutos para terminar`,
+    task: t.title || 'Atividade sem título',
+    detail: `${t.start} – ${t.end}`,
+    expiresAt: expires.getTime(),
+  });
+}
+
+function onAlertAnswer({ taskId, kind, answer }) {
+  const t = getTask(taskId);
+  if (!t || t.done) return;
+  if (answer === 'yes') {
+    toggleDone(t, true);
+    return;
+  }
+  if (answer === 'no' && kind === 'end10') {
+    const now = new Date();
+    if (now.getHours() * 60 + now.getMinutes() < timeToMin(t.end) - 1) followUps.add(endKey(t));
   }
 }
 
@@ -1186,6 +1221,7 @@ async function init() {
   bindHeader();
   render();
 
+  window.api.onAlertAnswer(onAlertAnswer);
   window.api.onOpenTask((id) => {
     const t = getTask(id);
     if (!t) return;

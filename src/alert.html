@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>Planner</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #111c33; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; overflow: hidden; user-select: none; }
+    .wrap { padding: 14px 16px 16px; border: 1px solid #2f4270; border-top: 4px solid #f97316; min-height: 100vh; }
+    .head { display: flex; align-items: center; gap: 8px; color: #8b9bb8; font-size: 12px; -webkit-app-region: drag; }
+    .head img { width: 18px; height: 18px; }
+    .head .app { flex: 1; }
+    .close { -webkit-app-region: no-drag; background: none; border: none; color: #8b9bb8; font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+    .close:hover { background: #1d2b4b; color: #e2e8f0; }
+    .heading { margin-top: 10px; font-weight: 700; font-size: 15px; color: #fdba74; }
+    .task { margin-top: 4px; font-weight: 600; font-size: 15px; word-break: break-word; }
+    .detail { margin-top: 2px; color: #8b9bb8; font-size: 12px; }
+    .question { margin-top: 12px; font-weight: 600; }
+    .buttons { display: flex; gap: 8px; margin-top: 10px; }
+    button.btn { flex: 1; font: inherit; border-radius: 8px; padding: 8px 10px; cursor: pointer; border: 1px solid #22314f; background: #16223d; color: #e2e8f0; }
+    button.btn:hover { background: #1d2b4b; }
+    button.yes { background: #16a34a; border-color: #16a34a; color: #fff; font-weight: 600; }
+    button.yes:hover { background: #22c55e; }
+  </style>
+</head>
+<body>
+  <div class="wrap" id="wrap">
+    <div class="head">
+      <img src="icon.png" alt="">
+      <span class="app">Planner</span>
+      <button class="close" id="close" title="Dispensar">&#10005;</button>
+    </div>
+    <div class="heading" id="heading"></div>
+    <div class="task" id="task"></div>
+    <div class="detail" id="detail"></div>
+    <div class="question">Você já finalizou?</div>
+    <div class="buttons">
+      <button class="btn yes" id="yes">&#10003; Sim, finalizei</button>
+      <button class="btn" id="no">Ainda não</button>
+    </div>
+  </div>
+  <script src="alert.js"></script>
+</body>
+</html>

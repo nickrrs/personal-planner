@@ -10,4 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteAttachment: (file) => ipcRenderer.invoke('attach:delete', file),
   notify: (payload) => ipcRenderer.send('notify', payload),
   onOpenTask: (cb) => ipcRenderer.on('open-task', (_e, id) => cb(id)),
+  showAlert: (payload) => ipcRenderer.send('alert:show', payload),
+  closeAlerts: (taskId) => ipcRenderer.send('alert:close-task', taskId),
+  onAlertAnswer: (cb) => ipcRenderer.on('alert-answer', (_e, data) => cb(data)),
 });
