@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>Planner</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">P</span> Planner</div>
+
+    <div class="datenav">
+      <button id="prevDay" class="btn icon" title="Dia anterior">&#8249;</button>
+      <button id="todayBtn" class="btn">Hoje</button>
+      <button id="nextDay" class="btn icon" title="Próximo dia">&#8250;</button>
+      <input type="date" id="datePicker" class="input">
+      <span id="dateLabel" class="date-label"></span>
+    </div>
+
+    <div class="modes" role="tablist">
+      <button data-mode="schedule" class="mode-btn">Cronograma</button>
+      <button data-mode="general" class="mode-btn">Geral</button>
+    </div>
+
+    <div class="actions">
+      <button id="catBtn" class="btn">Categorias</button>
+      <button id="newBtn" class="btn primary">+ Nova atividade</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside id="sidebar"></aside>
+    <main id="main"></main>
+    <section id="detail" class="drawer hidden"></section>
+  </div>
+
+  <div id="modalRoot"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
