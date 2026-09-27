@@ -11,7 +11,7 @@ const DEFAULT_COLOR = '#64748b';
 
 const DEFAULT_DATA = () => ({
   version: 1,
-  settings: { mode: 'schedule' },
+  settings: { mode: 'schedule', notifications: true },
   categories: [
     { id: uid(), name: 'Trabalho', color: '#3b82f6' },
     { id: uid(), name: 'Estudos', color: '#a855f7' },
@@ -125,8 +125,91 @@ function normalizeTask(t) {
     checklist: Array.isArray(t.checklist) ? t.checklist : [],
     comments: Array.isArray(t.comments) ? t.comments : [],
     attachments: Array.isArray(t.attachments) ? t.attachments : [],
+    seriesId: t.seriesId || '',
+    recurrence: normalizeRecurrence(t.recurrence),
     createdAt: t.createdAt || new Date().toISOString(),
   };
+}
+
+function normalizeRecurrence(r) {
+  r = r || {};
+  return {
+    type: ['daily', 'weekly'].includes(r.type) ? r.type : 'none',
+    days: Array.isArray(r.days) ? r.days : [],
+    until: r.until || '',
+    skip: Array.isArray(r.skip) ? r.skip : [],
+  };
+}
+
+// ---------- repetição ----------
+// A tarefa com `recurrence` é a origem da série; as ocorrências dos outros dias
+// são clonadas sob demanda (com `seriesId` apontando para a origem).
+
+const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const recurs = (t) => t.recurrence.type !== 'none';
+
+function occursOn(origin, date) {
+  const r = origin.recurrence;
+  if (!recurs(origin) || date <= origin.date) return false;
+  if (r.until && date > r.until) return false;
+  if (r.skip.includes(date)) return false;
+  if (r.type === 'weekly') return r.days.includes(parseDate(date).getDay());
+  return true;
+}
+
+function materialize(date) {
+  let added = false;
+  for (const o of state.data.tasks.filter(recurs)) {
+    if (!occursOn(o, date)) continue;
+    if (state.data.tasks.some((t) => t.seriesId === o.id && t.date === date)) continue;
+    state.data.tasks.push(
+      normalizeTask({
+        title: o.title,
+        start: o.start,
+        end: o.end,
+        categoryId: o.categoryId,
+        priority: o.priority,
+        description: o.description,
+        checklist: o.checklist.map((i) => ({ id: uid(), text: i.text, done: false })),
+        date,
+        seriesId: o.id,
+      })
+    );
+    added = true;
+  }
+  if (added) persist();
+  return added;
+}
+
+function isUntouched(t) {
+  return !t.done && !t.comments.length && !t.attachments.length;
+}
+
+// Propaga edições da origem para as próximas ocorrências e remove as que não se aplicam mais.
+function syncSeries(origin) {
+  const today = todayStr();
+  state.data.tasks = state.data.tasks.filter(
+    (t) => !(t.seriesId === origin.id && t.date > today && isUntouched(t) && !occursOn(origin, t.date))
+  );
+  if (!recurs(origin)) return;
+  for (const t of state.data.tasks) {
+    if (t.seriesId === origin.id && t.date >= today && !t.done) {
+      Object.assign(t, {
+        title: origin.title,
+        start: origin.start,
+        end: origin.end,
+        categoryId: origin.categoryId,
+        priority: origin.priority,
+        description: origin.description,
+      });
+    }
+  }
+}
+
+function recurrenceLabel(r) {
+  if (r.type === 'daily') return 'Todos os dias';
+  if (r.type === 'weekly') return 'Semanal: ' + (r.days.length ? [...r.days].sort().map((d) => WEEKDAYS[d]).join(', ') : '—');
+  return '';
 }
 
 const getTask = (id) => state.data.tasks.find((t) => t.id === id);
@@ -165,9 +248,21 @@ function createTask(fields = {}) {
 }
 
 function deleteTask(t) {
-  if (!confirm(`Excluir a atividade "${t.title || 'sem título'}"?`)) return;
-  t.attachments.forEach((a) => window.api.deleteAttachment(a.file));
-  state.data.tasks = state.data.tasks.filter((x) => x.id !== t.id);
+  const name = t.title || 'sem título';
+  const origin = t.seriesId && getTask(t.seriesId);
+  let msg = `Excluir a atividade "${name}"?`;
+  if (origin) msg = `Excluir apenas esta ocorrência de "${name}"? As outras repetições continuam.`;
+  else if (recurs(t)) msg = `Excluir "${name}" e parar a repetição? Ocorrências passadas ou concluídas serão mantidas.`;
+  if (!confirm(msg)) return;
+
+  if (origin) origin.recurrence.skip.push(t.date);
+  const removed = [t];
+  if (recurs(t)) {
+    const today = todayStr();
+    removed.push(...state.data.tasks.filter((x) => x.seriesId === t.id && x.date >= today && isUntouched(x)));
+  }
+  removed.forEach((x) => x.attachments.forEach((a) => window.api.deleteAttachment(a.file)));
+  state.data.tasks = state.data.tasks.filter((x) => !removed.includes(x));
   state.selectedId = null;
   persist();
   render();
@@ -175,9 +270,9 @@ function deleteTask(t) {
 
 function copyPendingFromPreviousDay() {
   const prev = addDays(state.date, -1);
-  const pending = dayTasks(prev).filter((t) => !t.done);
+  const pending = dayTasks(prev).filter((t) => !t.done && !t.seriesId && !recurs(t));
   if (!pending.length) {
-    alert('Não há atividades pendentes no dia anterior.');
+    alert('Não há atividades pendentes (não recorrentes) no dia anterior.');
     return;
   }
   pending.forEach((t) => {
@@ -197,16 +292,28 @@ function copyPendingFromPreviousDay() {
 
 // ---------- ações de UI ----------
 
+function syncSelected() {
+  const sel = state.selectedId && getTask(state.selectedId);
+  if (sel && !sel.seriesId) syncSeries(sel);
+}
+
 function changed() {
+  syncSelected();
   persist();
   render();
 }
 
 // Atualiza tudo menos o painel de detalhes (preserva o foco durante a edição).
 function changedLight() {
+  syncSelected();
   persist();
   renderSidebar();
   renderMain();
+}
+
+function toggleDone(t, done = !t.done) {
+  t.done = done;
+  changed();
 }
 
 function selectTask(id, focusTitle = false) {
@@ -253,6 +360,7 @@ function newTaskDefault() {
 // ---------- render ----------
 
 function render() {
+  materialize(state.date);
   renderHeader();
   renderSidebar();
   renderMain();
@@ -271,6 +379,13 @@ function renderHeader() {
   document.querySelectorAll('.mode-btn').forEach((b) => {
     b.classList.toggle('active', b.dataset.mode === state.data.settings.mode);
   });
+  const on = state.data.settings.notifications;
+  const btn = $('#notifyBtn');
+  btn.textContent = on ? '\u{1F514} Notificações' : '\u{1F515} Notificações';
+  btn.classList.toggle('off', !on);
+  btn.title = on
+    ? 'Notificações ativas no modo Cronograma: no início da atividade e 10 min antes do fim, se não estiver concluída. Clique para desativar.'
+    : 'Notificações desativadas. Clique para ativar.';
 }
 
 function renderSidebar() {
@@ -390,12 +505,9 @@ function taskCard(t, compact = false) {
       type: 'checkbox',
       class: 'chk',
       checked: t.done,
-      title: 'Concluir',
+      title: t.done ? 'Marcar como pendente' : 'Concluir',
       onclick: (e) => e.stopPropagation(),
-      onchange: (e) => {
-        t.done = e.target.checked;
-        changed();
-      },
+      onchange: (e) => toggleDone(t, e.target.checked),
     }),
     h(
       'div',
@@ -404,6 +516,7 @@ function taskCard(t, compact = false) {
       h(
         'div',
         { class: 'meta' },
+        (t.seriesId || recurs(t)) && h('span', { class: 'ind', title: 'Atividade recorrente' }, '\u21BB'),
         t.start && h('span', { class: 'time' }, t.start + (t.end ? ' – ' + t.end : '')),
         cat && h('span', { class: 'chip', style: { '--c': cat.color } }, cat.name),
         h('span', { class: 'prio', style: { '--p': pr.color } }, pr.label),
@@ -412,6 +525,18 @@ function taskCard(t, compact = false) {
         t.comments.length > 0 && h('span', { class: 'ind', title: 'Comentários' }, `\u{1F4AC} ${t.comments.length}`),
         t.attachments.length > 0 && h('span', { class: 'ind', title: 'Anexos' }, `\u{1F4CE} ${t.attachments.length}`)
       )
+    ),
+    h(
+      'button',
+      {
+        class: 'done-btn' + (t.done ? ' is-done' : ''),
+        title: t.done ? 'Marcar como pendente' : 'Concluir atividade',
+        onclick: (e) => {
+          e.stopPropagation();
+          toggleDone(t);
+        },
+      },
+      t.done ? 'Reabrir' : '\u2713 Concluir'
     )
   );
 }
@@ -474,6 +599,69 @@ function layoutTimed(tasks) {
   return out;
 }
 
+const SNAP_MIN = 15;
+let suppressClickUntil = 0;
+let endActiveDrag = null;
+
+function enableBlockDrag(block, t, it) {
+  block.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('.chk')) return;
+    const resizing = e.target.classList.contains('resize');
+    const startY = e.clientY;
+    const duration = it.e - it.s;
+    const meta = block.querySelector('.block-meta');
+    let moved = false;
+    let next = null;
+    e.preventDefault();
+    if (endActiveDrag) endActiveDrag(false);
+    block.setPointerCapture(e.pointerId);
+
+    const onMove = (ev) => {
+      const dy = ev.clientY - startY;
+      if (!moved && Math.abs(dy) < 4) return;
+      moved = true;
+      block.classList.add('dragging');
+      const delta = Math.round(((dy / HOUR_H) * 60) / SNAP_MIN) * SNAP_MIN;
+      if (resizing) {
+        const end = Math.max(it.s + SNAP_MIN, Math.min(1440, it.e + delta));
+        next = { s: it.s, e: end };
+        block.style.height = ((end - it.s) / 60) * HOUR_H - 2 + 'px';
+      } else {
+        const s = Math.max(0, Math.min(1440 - duration, it.s + delta));
+        next = { s, e: s + duration };
+        block.style.top = (s / 60) * HOUR_H + 'px';
+      }
+      const endLabel = !resizing && !t.end ? '' : ' – ' + minToTime(next.e);
+      meta.textContent = minToTime(next.s) + endLabel;
+    };
+
+    const finish = (commit) => {
+      endActiveDrag = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      block.removeEventListener('lostpointercapture', onUp);
+      if (!commit) {
+        if (moved) renderMain();
+        return;
+      }
+      if (!moved || !next) return;
+      suppressClickUntil = Date.now() + 300;
+      t.start = minToTime(next.s);
+      if (resizing || t.end) t.end = minToTime(next.e);
+      changed();
+    };
+
+    const onUp = () => finish(true);
+    const onCancel = () => finish(false);
+    endActiveDrag = finish;
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    block.addEventListener('lostpointercapture', onUp);
+  });
+}
+
 function renderSchedule(main, tasks) {
   const timed = tasks.filter((t) => t.start);
   const untimed = sortTasks(tasks.filter((t) => !t.start));
@@ -505,25 +693,35 @@ function renderSchedule(main, tasks) {
           width: `calc(${100 / it.cols}% - 4px)`,
           '--cat': cat ? cat.color : DEFAULT_COLOR,
         },
-        onclick: () => selectTask(t.id),
+        title: 'Clique para abrir · arraste para mudar o horário · puxe a borda de baixo para mudar a duração',
+        onclick: () => {
+          if (Date.now() < suppressClickUntil) return;
+          selectTask(t.id);
+        },
       },
       h('input', {
         type: 'checkbox',
         class: 'chk',
         checked: t.done,
+        title: t.done ? 'Marcar como pendente' : 'Concluir',
         onclick: (e) => e.stopPropagation(),
-        onchange: (e) => {
-          t.done = e.target.checked;
-          changed();
-        },
+        onchange: (e) => toggleDone(t, e.target.checked),
       }),
       h(
         'div',
         { class: 'block-body' },
-        h('div', { class: 'block-title' }, h('span', { class: 'dot', style: { background: pr.color }, title: pr.label }), t.title || '(sem título)'),
+        h(
+          'div',
+          { class: 'block-title' },
+          h('span', { class: 'dot', style: { background: pr.color }, title: pr.label }),
+          (t.seriesId || recurs(t)) && h('span', { class: 'rec', title: 'Atividade recorrente' }, '\u21BB'),
+          t.title || '(sem título)'
+        ),
         h('div', { class: 'block-meta' }, `${t.start}${t.end ? ' – ' + t.end : ''}${cat ? ' · ' + cat.name : ''}`)
-      )
+      ),
+      h('div', { class: 'resize', title: 'Arraste para mudar o horário de término' })
     );
+    enableBlockDrag(block, t, it);
     lane.append(block);
   }
 
@@ -612,15 +810,27 @@ function renderDetail() {
     h(
       'div',
       { class: 'drawer-head' },
-      h('input', { type: 'checkbox', class: 'chk big', checked: t.done, title: 'Concluída', onchange: (e) => { t.done = e.target.checked; changedLight(); } }),
+      h('input', { type: 'checkbox', class: 'chk big', checked: t.done, title: t.done ? 'Marcar como pendente' : 'Concluir', onchange: (e) => toggleDone(t, e.target.checked) }),
       h('input', { class: 'title-input', value: t.title, placeholder: 'Título da atividade', oninput: (e) => { t.title = e.target.value; changedLight(); } }),
       h('button', { class: 'btn icon', title: 'Fechar (Esc)', onclick: () => selectTask(null) }, '\u2715')
     ),
     h(
       'div',
       { class: 'drawer-body' },
+      t.done && h('div', { class: 'done-banner' }, '\u2713 Atividade concluída'),
       h('div', { class: 'grid2' },
-        field('Data', h('input', { type: 'date', class: 'input', value: t.date, onchange: (e) => { if (e.target.value) { t.date = e.target.value; changedLight(); } } })),
+        field('Data', h('input', {
+          type: 'date',
+          class: 'input',
+          value: t.date,
+          onchange: (e) => {
+            if (!e.target.value) return;
+            const origin = t.seriesId && getTask(t.seriesId);
+            if (origin && !origin.recurrence.skip.includes(t.date)) origin.recurrence.skip.push(t.date);
+            t.date = e.target.value;
+            changed();
+          },
+        })),
         field('Prioridade', prioSel)
       ),
       h('div', { class: 'grid3' },
@@ -629,12 +839,105 @@ function renderDetail() {
         h('button', { class: 'btn ghost align-end', title: 'Remover horário (vai para "Sem horário")', onclick: () => { t.start = ''; t.end = ''; changed(); } }, 'Sem horário')
       ),
       field('Categoria', catSel),
-      field('Descrição', h('textarea', { class: 'input', rows: 3, placeholder: 'Detalhes da atividade...', oninput: (e) => { t.description = e.target.value; persist(); } }, t.description)),
+      field('Descrição', h('textarea', { class: 'input', rows: 3, placeholder: 'Detalhes da atividade...', oninput: (e) => { t.description = e.target.value; changedLight(); } }, t.description)),
+      recurrenceSection(t),
       checklistSection(t),
       commentsSection(t),
       attachmentsSection(t)
     ),
-    h('div', { class: 'drawer-foot' }, h('button', { class: 'btn danger', onclick: () => deleteTask(t) }, 'Excluir atividade'))
+    h(
+      'div',
+      { class: 'drawer-foot' },
+      h('button', { class: 'btn danger', onclick: () => deleteTask(t) }, 'Excluir'),
+      h('div', { class: 'spacer' }),
+      t.done
+        ? h('button', { class: 'btn', onclick: () => toggleDone(t, false) }, 'Marcar como pendente')
+        : h('button', { class: 'btn success', onclick: () => toggleDone(t, true) }, '\u2713 Concluir atividade')
+    )
+  );
+}
+
+function recurrenceSection(t) {
+  const origin = t.seriesId && getTask(t.seriesId);
+  if (t.seriesId) {
+    return h(
+      'div',
+      { class: 'section' },
+      h('div', { class: 'section-title' }, '\u21BB Repetição'),
+      origin
+        ? [
+            h('div', { class: 'muted' }, `Esta é uma ocorrência de uma atividade recorrente (${recurrenceLabel(origin.recurrence)}). Mudanças aqui valem só para este dia.`),
+            h(
+              'div',
+              { class: 'row' },
+              h('button', { class: 'btn small', onclick: () => selectTask(origin.id) }, 'Editar a série'),
+              h('button', {
+                class: 'btn small',
+                onclick: () => {
+                  if (!confirm('Parar a repetição a partir deste dia (inclusive)?')) return;
+                  origin.recurrence.until = addDays(t.date, -1);
+                  syncSeries(origin);
+                  if (isUntouched(t)) state.data.tasks = state.data.tasks.filter((x) => x !== t);
+                  state.selectedId = null;
+                  persist();
+                  render();
+                },
+              }, 'Parar a partir daqui')
+            ),
+          ]
+        : h('div', { class: 'muted' }, 'A série original desta atividade foi excluída.')
+    );
+  }
+
+  const r = t.recurrence;
+  const typeSel = h(
+    'select',
+    {
+      class: 'input',
+      onchange: (e) => {
+        r.type = e.target.value;
+        if (r.type === 'weekly' && !r.days.length) r.days = [parseDate(t.date).getDay()];
+        changed();
+      },
+    },
+    h('option', { value: 'none' }, 'Não se repete'),
+    h('option', { value: 'daily' }, 'Diariamente'),
+    h('option', { value: 'weekly' }, 'Semanalmente')
+  );
+  typeSel.value = r.type;
+
+  return h(
+    'div',
+    { class: 'section' },
+    h('div', { class: 'section-title' }, '\u21BB Repetição'),
+    typeSel,
+    r.type === 'weekly' &&
+      h(
+        'div',
+        { class: 'weekdays' },
+        WEEKDAYS.map((name, i) =>
+          h('button', {
+            class: 'day-btn' + (r.days.includes(i) ? ' active' : ''),
+            onclick: () => {
+              r.days = r.days.includes(i) ? r.days.filter((d) => d !== i) : [...r.days, i];
+              changed();
+            },
+          }, name)
+        )
+      ),
+    recurs(t) &&
+      h(
+        'div',
+        { class: 'grid2' },
+        field('Termina em (opcional)', h('input', {
+          type: 'date',
+          class: 'input',
+          value: r.until,
+          min: t.date,
+          onchange: (e) => { r.until = e.target.value; changed(); },
+        })),
+        h('div', { class: 'muted align-end' }, 'Edições aqui são aplicadas às próximas ocorrências pendentes.')
+      )
   );
 }
 
@@ -813,6 +1116,10 @@ function bindHeader() {
   $('#datePicker').onchange = (e) => setDate(e.target.value);
   document.querySelectorAll('.mode-btn').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
   $('#catBtn').onclick = openCategories;
+  $('#notifyBtn').onclick = () => {
+    state.data.settings.notifications = !state.data.settings.notifications;
+    changed();
+  };
   $('#newBtn').onclick = newTaskDefault;
 
   document.addEventListener('keydown', (e) => {
@@ -828,13 +1135,47 @@ function bindHeader() {
   });
 }
 
+// ---------- notificações ----------
+
+const notified = new Set();
+
+function notifyOnce(t, kind, time, title, body) {
+  const key = `${t.id}|${t.date}|${kind}|${time}`;
+  if (notified.has(key)) return;
+  notified.add(key);
+  window.api.notify({ title, body, taskId: t.id });
+}
+
+function checkNotifications() {
+  const { mode, notifications } = state.data.settings;
+  if (mode !== 'schedule' || !notifications) return;
+  const today = todayStr();
+  if (materialize(today) && state.date === today) render();
+  const now = new Date();
+  const m = now.getHours() * 60 + now.getMinutes();
+
+  for (const t of dayTasks(today)) {
+    if (t.done || !t.start) continue;
+    const name = t.title || 'Atividade sem título';
+    const s = timeToMin(t.start);
+    const e = timeToMin(t.end);
+    if (m >= s && m < s + 5) {
+      notifyOnce(t, 'start', t.start, `Hora de começar: ${name}`, t.end ? `${t.start} – ${t.end}` : `Começa às ${t.start}`);
+    }
+    if (e != null && e > s && m >= e - 10 && m < e) {
+      const left = e - m;
+      notifyOnce(t, 'end', t.end, `Faltam ${left} min para terminar: ${name}`, `Termina às ${t.end} e ainda não foi concluída.`);
+    }
+  }
+}
+
 async function init() {
   const loaded = await window.api.load();
   if (loaded && Array.isArray(loaded.tasks)) {
     state.data = {
       ...DEFAULT_DATA(),
       ...loaded,
-      settings: { mode: 'schedule', ...(loaded.settings || {}) },
+      settings: { ...DEFAULT_DATA().settings, ...(loaded.settings || {}) },
       categories: Array.isArray(loaded.categories) ? loaded.categories : [],
       tasks: loaded.tasks.map(normalizeTask),
     };
@@ -845,10 +1186,21 @@ async function init() {
   bindHeader();
   render();
 
+  window.api.onOpenTask((id) => {
+    const t = getTask(id);
+    if (!t) return;
+    state.date = t.date;
+    state.scrollTop = null;
+    selectTask(id);
+  });
+
   setInterval(() => {
-    const typing = $('#main').contains(document.activeElement);
+    const typing = $('#main').contains(document.activeElement) || document.querySelector('.block.dragging');
     if (!typing && state.data.settings.mode === 'schedule' && state.date === todayStr()) renderMain();
   }, 60 * 1000);
+
+  checkNotifications();
+  setInterval(checkNotifications, 20 * 1000);
 }
 
 init();

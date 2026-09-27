@@ -8,7 +8,8 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable"
+    "dist": "electron-builder --win portable",
+    "icon": "electron scripts/make-icon.js"
   },
   "build": {
     "appId": "com.nick.planner",
@@ -23,7 +24,7 @@
     ],
     "win": {
       "target": "portable",
-      "signAndEditExecutable": false
+      "icon": "build/icon.ico"
     },
     "portable": {
       "artifactName": "Planner.exe"
