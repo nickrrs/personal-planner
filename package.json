@@ -27,8 +27,12 @@
       "target": "portable",
       "icon": "build/icon.ico"
     },
+    "extraResources": [
+      "build/icon.ico"
+    ],
     "portable": {
-      "artifactName": "Planner.exe"
+      "artifactName": "Planner.exe",
+      "unpackDirName": "Planner"
     }
   },
   "devDependencies": {

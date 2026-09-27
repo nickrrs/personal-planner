@@ -7,6 +7,10 @@ const dataFile = () => path.join(app.getPath('userData'), 'planner-data.json');
 const attachDir = () => path.join(app.getPath('userData'), 'attachments');
 const attachPath = (file) => path.join(attachDir(), path.basename(file));
 const icon = () => nativeImage.createFromPath(path.join(__dirname, 'src', 'icon.png'));
+const windowIconPath = () =>
+  app.isPackaged
+    ? path.join(process.resourcesPath, 'build', 'icon.ico')
+    : path.join(__dirname, 'build', 'icon.ico');
 
 function writeData(data) {
   const tmp = dataFile() + '.tmp';
@@ -34,7 +38,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 600,
     title: 'Planner',
-    icon: icon(),
+    icon: windowIconPath(),
     backgroundColor: '#0f172a',
     autoHideMenuBar: true,
     webPreferences: {
